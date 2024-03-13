@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+import os
+import ctypes
+import sys
+import mmap
+import heapq
+
+PAGE_SIZE = os.sysconf('SC_PAGESIZE')
+libc = ctypes.CDLL('libc.so.6')
+
+class MountInfo:
+    def __init__(self, search_type = ["ext4","tmpfs"]) -> None:
+        self.search_type = search_type
+        self.exclude_dir = []
+        self.search_dir = []
+        self.update_mount_info()
+
+    def update_mount_info(self):
+        with open("/proc/mounts", "r") as f:
+            mount_info = f.readlines()
+
+        for line in mount_info:
+            mount_info = line.split()
+            path, type = mount_info[1], mount_info[2]
+            if type in self.search_type:
+                self.search_dir.append(path)
+            else:
+                self.exclude_dir.append(path)
+
+def bytes_to_readable(size_in_bytes, decimal_places=2):
+    suffixes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+    index = 0
+
+    while size_in_bytes >= 1024 and index < len(suffixes) - 1:
+        size_in_bytes /= 1024.0
+        index += 1
+
+    return f"{size_in_bytes:.{decimal_places}f} {suffixes[index]}"
+
+def walk_files(dir="/", exclude_dir=[]):
+
+    exclude_dir = [os.path.abspath(d) for d in exclude_dir]
+
+    for root, dirs, files in os.walk(dir):
+        dirs[:] = [d for d in dirs if os.path.abspath(os.path.join(root, d)) not in exclude_dir]
+
+        for filename in files:
+            file_path = os.path.join(root, filename)
+            if not os.path.islink(file_path):
+                yield file_path
+
+class SortedQueue:
+    def __init__(self, max_size):
+        self.heap = []
+        self.max_size = max_size
+
+    def push(self, item_pair):
+        heapq.heappush(self.heap, item_pair)
+        if len(self.heap) > self.max_size:
+            self.pop()
+
+    def pop(self):
+        if self.heap:
+            return heapq.heappop(self.heap)
+        else:
+            raise IndexError("pop from an empty queue")
+
+    def peek(self):
+        if self.heap:
+            return self.heap[0]
+        else:
+            return None
+
+    def walk_all_elements(self):
+        for item in self.heap:
+            yield item
+
+def get_cached_pages_size(fd, file_size):
+
+    with mmap.mmap(fd, file_size, mmap.MAP_PRIVATE|mmap.ACCESS_READ) as result:
+        res = ctypes.c_uint8.from_buffer(result)
+        addr = ctypes.byref(res)
+
+        vec = (ctypes.c_char * (file_size // PAGE_SIZE + (file_size % PAGE_SIZE != 0)))()
+
+        result = libc.mincore(addr, ctypes.c_size_t(file_size), ctypes.byref(vec))
+        del res, addr
+
+        if result == -1:
+            errno = ctypes.get_errno()
+            raise OSError(errno, f"mincore failed with error code {errno}")
+
+    cached_pages = sum(bytearray(vec))
+    return cached_pages * PAGE_SIZE
+
+if __name__ == "__main__":
+    mount_info = MountInfo()
+    queue = SortedQueue(20)
+    queue.push([0,""])
+    for file in walk_files("/", mount_info.exclude_dir):
+        try:
+            fd = os.open(file, os.O_RDWR|os.O_EXCL)
+        except:
+            continue
+
+        file_size = os.fstat(fd).st_size
+        if file_size < 4096 or file_size < queue.peek()[0]:
+            os.close(fd)
+            continue
+
+        try:
+            cached_size = get_cached_pages_size(fd, file_size)
+            queue.push([cached_size, file])
+        except Exception as e:
+            print(f"Error: {e} file_size: {file_size} file_path: {file}")
+        finally:
+            os.close(fd)
+
+    max_len = 0
+    res = []
+    for item in queue.walk_all_elements():
+        max_len = max(max_len, len(item[1]))
+        res.append(item)
+
+    res.sort(key=lambda x: x[0], reverse=True)
+
+    print(f'{"FILE NAME":<{max_len}} \t\t{"CACHE SIZE":<20} {"FILE SIZE"}')
+    for item in res:
+        print(f"{item[1]:<{max_len}} \t\t{bytes_to_readable(item[0]):<20} {bytes_to_readable(os.path.getsize(item[1])):<20}")
+
