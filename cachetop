@@ -54,6 +54,11 @@ from typing import List,Tuple
 
 PAGE_SIZE = os.sysconf("SC_PAGESIZE")
 libc = ctypes.CDLL("libc.so.6")
+vec_length = 10 * 1024 * 1024 * 1024
+vec = (
+    # 10 GB / 4096 = 2560 KB
+    ctypes.c_char * (vec_length // PAGE_SIZE)
+)()
 
 
 class MountInfo:
@@ -230,29 +235,38 @@ def get_cached_pages_size(fd:int, file_size:int):
 
     Note: This function assumes that the `PAGE_SIZE` constant is defined elsewhere.
     """
+    cached_pages = 0
     with mmap.mmap(fd, file_size, mmap.MAP_PRIVATE | mmap.ACCESS_READ) as result:
         # get buf from mmap object & get addr of this buf
         res = ctypes.c_uint8.from_buffer(result)
         addr = ctypes.byref(res)
+        addr_ptr_val = ctypes.cast(addr, ctypes.c_void_p).value
 
-        vec = (
-            ctypes.c_char * (file_size // PAGE_SIZE + (file_size % PAGE_SIZE != 0))
-        )()
+        remaining_size = file_size
+        offset = 0
+        while remaining_size > 0:
+            segment_size = min(remaining_size, vec_length)
+            result = libc.mincore(ctypes.c_void_p(addr_ptr_val),
+                                  ctypes.c_size_t(segment_size), ctypes.byref(vec))
+            if result == -1:
+                errno = ctypes.get_errno()
+                raise OSError(errno, f"mincore failed with error code {errno}")
 
-        result = libc.mincore(addr, ctypes.c_size_t(file_size), ctypes.byref(vec))
+            cached_pages += sum(bytearray(vec[:segment_size // PAGE_SIZE + (segment_size % PAGE_SIZE != 0)]))
+            remaining_size -= segment_size
+            offset += segment_size
+            addr_ptr_val += offset
+
         del res, addr
 
-        if result == -1:
-            errno = ctypes.get_errno()
-            raise OSError(errno, f"mincore failed with error code {errno}")
-
-    cached_pages = sum(bytearray(vec))
     return cached_pages * PAGE_SIZE
 
 
 def main(mount_info: MountInfo, queue: SortedQueue, search_path: str):
     queue.push([0, ""])
+    count, mincore_count = 0, 0
     for file in walk_files(search_path, mount_info.exclude_dir):
+        count += 1
         try:
             fd = os.open(file, os.O_RDWR | os.O_EXCL)
         except:
@@ -264,6 +278,7 @@ def main(mount_info: MountInfo, queue: SortedQueue, search_path: str):
             continue
 
         try:
+            mincore_count += 1
             cached_size = get_cached_pages_size(fd, file_size)
             queue.push((cached_size, file))
         except Exception as e:
@@ -278,13 +293,17 @@ def main(mount_info: MountInfo, queue: SortedQueue, search_path: str):
         res.append(item)
 
     res.sort(key=lambda x: x[0], reverse=True)
+    
+    print(f'Process {count} files. Mincore {mincore_count} files.')
 
-    print(f'{"FILE NAME":<{max_len}} | {"CACHE SIZE":<20} | {"FILE SIZE":<20}')
-    print(f'{"-"*max_len}---{"-"*20}---{"-"*20}')
+    print(f'|{"-"*max_len}---{"-"*20}---{"-"*20}|')
+    print(f'|{"FILE NAME":<{max_len}} | {"CACHE SIZE":<20} | {"FILE SIZE":<20}|')
+    print(f'|{"-"*max_len}---{"-"*20}---{"-"*20}|')
     for item in res:
         print(
-            f"{item[1]:<{max_len}} | {bytes_to_readable(item[0]):<20} | {bytes_to_readable(os.path.getsize(item[1])):<20}"
+            f"|{item[1]:<{max_len}} | {bytes_to_readable(item[0]):<20} | {bytes_to_readable(os.path.getsize(item[1])):<20}|"
         )
+    print(f'|{"-"*max_len}---{"-"*20}---{"-"*20}|')
 
 
 if __name__ == "__main__":
