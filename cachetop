@@ -1,21 +1,88 @@
 #!/usr/bin/env python3
+
+"""
+Copyright (c) 2024 Xin Shuichen <zhangyuchen.prog@foxmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Distributed according to the BSD-2-Clause
+"""
+
+
+epilog = """
+Examples:
+  Search all files under the root directory and print the top 5 files occupying the most cache:
+    cachetop -n 5
+
+  Search all files under the /test directory and print the top 5 files occupying the most cache:
+    cachetop /test -n 5
+
+  Search all files under the root directory, print the top 10 files, and include nfs, bcachefs, and tmpfs file systems:
+    cachetop -n 5 --include_fs "nfs,bcachefs,tmpfs"
+
+  Search files under the root directory, excluding files in the /root and /home directories:
+    cachetop --exclude_dir "/root|/home"
+
+Advantages:
+  - Low memory usage, not exceeding 20M RSS on the author's machine. Memory usage does not grow with the num of files to be scanned.
+  - Displays page cache even if it is not associated with a process.
+  - Excludes all virtual file systems, currently only reads ext4 and tmpfs file systems.
+"""
+
 import os
 import ctypes
-import sys
 import mmap
 import heapq
+import argparse
+from typing import List,Tuple
 
-PAGE_SIZE = os.sysconf('SC_PAGESIZE')
-libc = ctypes.CDLL('libc.so.6')
+PAGE_SIZE = os.sysconf("SC_PAGESIZE")
+libc = ctypes.CDLL("libc.so.6")
+
 
 class MountInfo:
-    def __init__(self, search_type = ["ext4","tmpfs"]) -> None:
+    def __init__(self, search_type:List[str]=["ext4", "tmpfs"], exclude_dir:List[str]=[]) -> None:
+        """
+        Initialize a MountInfo object which stores information about mounted file systems based on user-defined search criteria.
+
+        Args:
+        search_type (List[str], optional): A list of file system types to include in the search. By default, it includes "ext4" and "tmpfs".
+        exclude_dir (List[str], optional): An initially empty list to store paths of mounted file systems that do not match the provided search types.
+
+        Attributes:
+        search_type (List[str]): File system types to consider when updating the search_dir attribute.
+        exclude_dir (List[str]): Paths of mounted file systems that will be excluded based on their type.
+        search_dir (List[str]): A list that will be populated with paths of mounted file systems matching the search_type criteria.
+
+        Upon initialization, this class reads the system's "/proc/mounts" file to gather mount information and calls the `update_mount_info()` method to populate the `search_dir` attribute.
+        """
         self.search_type = search_type
-        self.exclude_dir = []
+        self.exclude_dir = exclude_dir
         self.search_dir = []
         self.update_mount_info()
 
     def update_mount_info(self):
+        """
+        Updates the search_dir and exclude_dir attributes by parsing the "/proc/mounts" file.
+
+        This method reads each line of the "/proc/mounts" file, splits the line into separate fields, and checks the file system type against the `search_type` list. If the type matches, the corresponding path is appended to the `search_dir`. Otherwise, it is appended to the `exclude_dir`.
+        """
         with open("/proc/mounts", "r") as f:
             mount_info = f.readlines()
 
@@ -27,61 +94,150 @@ class MountInfo:
             else:
                 self.exclude_dir.append(path)
 
-def bytes_to_readable(size_in_bytes, decimal_places=2):
-    suffixes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+
+class SortedQueue:
+    def __init__(self, max_size: int):
+        """
+        Initialize a SortedQueue with a maximum size.
+        
+        Args:
+        max_size (int): The maximum number of items the queue can hold.
+        
+        Attributes:
+        heap (list): A list used to implement a binary heap to maintain sorted order.
+        max_size (int): The maximum capacity of the queue.
+        """
+        self.heap = []
+        self.max_size = max_size
+
+    def push(self, item_pair: Tuple[int, str]):
+        """
+        Add an item_pair to the queue while maintaining sorted order.
+        
+        If the queue exceeds its maximum size after adding the new item_pair, 
+        the smallest item_pair is automatically removed (using a heap pop operation).
+
+        Args:
+        item_pair: The pair of items to be added to the queue.
+        """
+        heapq.heappush(self.heap, list(item_pair))
+        if len(self.heap) > self.max_size:
+            self.pop()
+
+    def pop(self) -> Tuple[int, str]:
+        """
+        Remove and return the smallest item_pair from the queue.
+
+        Raises:
+        IndexError: If the queue is empty.
+        """
+        if self.heap:
+            return tuple(heapq.heappop(self.heap))
+        else:
+            raise IndexError("pop from an empty queue")
+
+    def peek(self) -> Tuple[int, str] | None:
+        """
+        Return the smallest item_pair in the queue without removing it.
+
+        Returns:
+        The smallest item_pair or None if the queue is empty.
+        """
+        if self.heap:
+            return tuple(self.heap[0])
+        else:
+            return None
+
+    def walk_all_elements(self):
+        """
+        Iterate through all elements in the queue in their sorted order.
+
+        Yields:
+        item_pair: Each item_pair in the queue one by one.
+        """
+        for item in self.heap:
+            yield item
+
+
+def bytes_to_readable(size:int, decimal_places:int=2):
+    """
+    Convert the given size in bytes into a human-readable format.
+
+    Args:
+    size_in_bytes (int or float): Size in bytes to be converted.
+    decimal_places (int, optional): Number of decimal places to round the result to. Default is 2.
+
+    Returns:
+    str: Human-readable file size with a unit suffix (e.g., '1.56 MB').
+    
+    The function iteratively divides the size by 1024 until it's less than 1024,
+    appending the appropriate suffix ('B', 'KB', 'MB', 'GB', 'TB', 'PB') as it goes.
+    """
+    suffixes = ["B", "KB", "MB", "GB", "TB", "PB"]
     index = 0
 
-    while size_in_bytes >= 1024 and index < len(suffixes) - 1:
-        size_in_bytes /= 1024.0
+    while size >= 1024 and index < len(suffixes) - 1:
+        size /= 1024.0
         index += 1
 
-    return f"{size_in_bytes:.{decimal_places}f} {suffixes[index]}"
+    return f"{size:.{decimal_places}f} {suffixes[index]}"
 
-def walk_files(dir="/", exclude_dir=[]):
 
+def walk_files(dir:str="/", exclude_dir:List[str]=[]):
+    """
+    Generator function that walks through all files in the specified directory (inclusive),
+    excluding directories listed in the exclude_dir argument.
+
+    Args:
+    dir (str, optional): The root directory to start walking from. Default is '/' (the root directory).
+    exclude_dir (list, optional): A list of directory paths to exclude from the search. Default is empty.
+
+    Yields:
+    str: Absolute path of each file found during the traversal.
+
+    The function uses os.walk() to traverse the directory tree, but filters out directories
+    contained in the exclude_dir list before iterating over the files within each directory.
+    """
     exclude_dir = [os.path.abspath(d) for d in exclude_dir]
 
     for root, dirs, files in os.walk(dir):
-        dirs[:] = [d for d in dirs if os.path.abspath(os.path.join(root, d)) not in exclude_dir]
+        dirs[:] = [
+            d for d in dirs if os.path.abspath(os.path.join(root, d)) not in exclude_dir
+        ]
 
         for filename in files:
             file_path = os.path.join(root, filename)
             if not os.path.islink(file_path):
                 yield file_path
 
-class SortedQueue:
-    def __init__(self, max_size):
-        self.heap = []
-        self.max_size = max_size
 
-    def push(self, item_pair):
-        heapq.heappush(self.heap, item_pair)
-        if len(self.heap) > self.max_size:
-            self.pop()
+def get_cached_pages_size(fd:int, file_size:int):
+    """
+    Determine the total size of pages from the given file descriptor that are currently cached in memory.
 
-    def pop(self):
-        if self.heap:
-            return heapq.heappop(self.heap)
-        else:
-            raise IndexError("pop from an empty queue")
+    Args:
+    fd (int): File descriptor of the opened file.
+    file_size (int): Size of the file in bytes.
 
-    def peek(self):
-        if self.heap:
-            return self.heap[0]
-        else:
-            return None
+    Process:
+    1. Create a memory-mapped object using `mmap` with `MAP_PRIVATE` and `ACCESS_READ` flags.
+    2. Obtain a buffer pointer from the memory-mapped object and convert it to a C-compatible address.
+    3. Allocate a character array `vec` large enough to store one bit per page, rounded up to account for the remainder if the file size isn't a multiple of the page size.
+    4. Call the `mincore` system call to determine which pages of the file are resident in memory. The result is stored in the `vec` array.
 
-    def walk_all_elements(self):
-        for item in self.heap:
-            yield item
+    Returns:
+    int: The total size in bytes of the pages that are cached in memory.
 
-def get_cached_pages_size(fd, file_size):
-
-    with mmap.mmap(fd, file_size, mmap.MAP_PRIVATE|mmap.ACCESS_READ) as result:
+    Note: This function assumes that the `PAGE_SIZE` constant is defined elsewhere.
+    """
+    with mmap.mmap(fd, file_size, mmap.MAP_PRIVATE | mmap.ACCESS_READ) as result:
+        # get buf from mmap object & get addr of this buf
         res = ctypes.c_uint8.from_buffer(result)
         addr = ctypes.byref(res)
 
-        vec = (ctypes.c_char * (file_size // PAGE_SIZE + (file_size % PAGE_SIZE != 0)))()
+        vec = (
+            ctypes.c_char * (file_size // PAGE_SIZE + (file_size % PAGE_SIZE != 0))
+        )()
 
         result = libc.mincore(addr, ctypes.c_size_t(file_size), ctypes.byref(vec))
         del res, addr
@@ -93,26 +249,25 @@ def get_cached_pages_size(fd, file_size):
     cached_pages = sum(bytearray(vec))
     return cached_pages * PAGE_SIZE
 
-if __name__ == "__main__":
-    mount_info = MountInfo()
-    queue = SortedQueue(20)
-    queue.push([0,""])
-    for file in walk_files("/", mount_info.exclude_dir):
+
+def main(mount_info: MountInfo, queue: SortedQueue, search_path: str):
+    queue.push([0, ""])
+    for file in walk_files(search_path, mount_info.exclude_dir):
         try:
-            fd = os.open(file, os.O_RDWR|os.O_EXCL)
+            fd = os.open(file, os.O_RDWR | os.O_EXCL)
         except:
             continue
 
         file_size = os.fstat(fd).st_size
-        if file_size < 4096 or file_size < queue.peek()[0]:
+        if file_size == 0 or file_size < queue.peek()[0]:
             os.close(fd)
             continue
 
         try:
             cached_size = get_cached_pages_size(fd, file_size)
-            queue.push([cached_size, file])
+            queue.push((cached_size, file))
         except Exception as e:
-            print(f"Error: {e} file_size: {file_size} file_path: {file}")
+            print(f"Error: {e} {type(queue.peek()[0])} file_size: {file_size} file_path: {file}")
         finally:
             os.close(fd)
 
@@ -124,7 +279,58 @@ if __name__ == "__main__":
 
     res.sort(key=lambda x: x[0], reverse=True)
 
-    print(f'{"FILE NAME":<{max_len}} \t\t{"CACHE SIZE":<20} {"FILE SIZE"}')
+    print(f'{"FILE NAME":<{max_len}} | {"CACHE SIZE":<20} | {"FILE SIZE":<20}')
+    print(f'{"-"*max_len}---{"-"*20}---{"-"*20}')
     for item in res:
-        print(f"{item[1]:<{max_len}} \t\t{bytes_to_readable(item[0]):<20} {bytes_to_readable(os.path.getsize(item[1])):<20}")
+        print(
+            f"{item[1]:<{max_len}} | {bytes_to_readable(item[0]):<20} | {bytes_to_readable(os.path.getsize(item[1])):<20}"
+        )
+
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(
+        description="Display the top N files occupying the most cache in the specified path (default is root directory '/').",
+        epilog=epilog,
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+
+    parser.add_argument(
+        "search_path",
+        nargs="?",
+        default="/",
+        help="The directory path to search for files (default: '/')",
+    )
+    parser.add_argument(
+        "--topn",
+        "-n",
+        type=int,
+        default=10,
+        help="Print the top N files occupying the most cache (default: 10)",
+    )
+    parser.add_argument(
+        "--include_fs",
+        "-f",
+        type=str,
+        default="ext4,tmpfs",
+        help="Comma-separated list of file systems to include (default: 'ext4,tmpfs')",
+    )
+    parser.add_argument(
+        "--exclude_dir",
+        "-e",
+        type=str,
+        help="Pipe-separated list of directories to exclude (e.g., '/test|/test1')",
+    )
+
+    args = parser.parse_args()
+
+    include_fs = args.include_fs.split(",")
+    exclude_dir = args.exclude_dir.split("|") if args.exclude_dir else []
+    mount_info = MountInfo(include_fs, exclude_dir)
+
+    topn = args.topn
+    queue = SortedQueue(topn)
+
+    search_path = args.search_path
+    main(mount_info, queue, search_path)
 
