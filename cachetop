@@ -63,31 +63,12 @@ vec = (
 
 class MountInfo:
     def __init__(self, search_type:List[str]=["ext4", "tmpfs"], exclude_dir:List[str]=[]) -> None:
-        """
-        Initialize a MountInfo object which stores information about mounted file systems based on user-defined search criteria.
-
-        Args:
-        search_type (List[str], optional): A list of file system types to include in the search. By default, it includes "ext4" and "tmpfs".
-        exclude_dir (List[str], optional): An initially empty list to store paths of mounted file systems that do not match the provided search types.
-
-        Attributes:
-        search_type (List[str]): File system types to consider when updating the search_dir attribute.
-        exclude_dir (List[str]): Paths of mounted file systems that will be excluded based on their type.
-        search_dir (List[str]): A list that will be populated with paths of mounted file systems matching the search_type criteria.
-
-        Upon initialization, this class reads the system's "/proc/mounts" file to gather mount information and calls the `update_mount_info()` method to populate the `search_dir` attribute.
-        """
         self.search_type = search_type
         self.exclude_dir = exclude_dir
         self.search_dir = []
         self.update_mount_info()
 
     def update_mount_info(self):
-        """
-        Updates the search_dir and exclude_dir attributes by parsing the "/proc/mounts" file.
-
-        This method reads each line of the "/proc/mounts" file, splits the line into separate fields, and checks the file system type against the `search_type` list. If the type matches, the corresponding path is appended to the `search_dir`. Otherwise, it is appended to the `exclude_dir`.
-        """
         with open("/proc/mounts", "r") as f:
             mount_info = f.readlines()
 
@@ -102,82 +83,32 @@ class MountInfo:
 
 class SortedQueue:
     def __init__(self, max_size: int):
-        """
-        Initialize a SortedQueue with a maximum size.
-        
-        Args:
-        max_size (int): The maximum number of items the queue can hold.
-        
-        Attributes:
-        heap (list): A list used to implement a binary heap to maintain sorted order.
-        max_size (int): The maximum capacity of the queue.
-        """
         self.heap = []
         self.max_size = max_size
 
     def push(self, item_pair: Tuple[int, str]):
-        """
-        Add an item_pair to the queue while maintaining sorted order.
-        
-        If the queue exceeds its maximum size after adding the new item_pair, 
-        the smallest item_pair is automatically removed (using a heap pop operation).
-
-        Args:
-        item_pair: The pair of items to be added to the queue.
-        """
         heapq.heappush(self.heap, list(item_pair))
         if len(self.heap) > self.max_size:
             self.pop()
 
     def pop(self) -> Tuple[int, str]:
-        """
-        Remove and return the smallest item_pair from the queue.
-
-        Raises:
-        IndexError: If the queue is empty.
-        """
         if self.heap:
             return tuple(heapq.heappop(self.heap))
         else:
             raise IndexError("pop from an empty queue")
 
     def peek(self) -> Tuple[int, str] | None:
-        """
-        Return the smallest item_pair in the queue without removing it.
-
-        Returns:
-        The smallest item_pair or None if the queue is empty.
-        """
         if self.heap:
             return tuple(self.heap[0])
         else:
             return None
 
     def walk_all_elements(self):
-        """
-        Iterate through all elements in the queue in their sorted order.
-
-        Yields:
-        item_pair: Each item_pair in the queue one by one.
-        """
         for item in self.heap:
             yield item
 
 
 def bytes_to_readable(size:int, decimal_places:int=2):
-    """
-    Convert the given size in bytes into a human-readable format.
-
-    Args:
-    size_in_bytes (int or float): Size in bytes to be converted.
-    decimal_places (int, optional): Number of decimal places to round the result to. Default is 2.
-
-    Returns:
-    str: Human-readable file size with a unit suffix (e.g., '1.56 MB').
-    
-    The function iteratively divides the size by 1024 until it's less than 1024,
-    appending the appropriate suffix ('B', 'KB', 'MB', 'GB', 'TB', 'PB') as it goes.
-    """
     suffixes = ["B", "KB", "MB", "GB", "TB", "PB"]
     index = 0
 
@@ -189,20 +120,6 @@ def bytes_to_readable(size:int, decimal_places:int=2):
 
 
 def walk_files(dir:str="/", exclude_dir:List[str]=[]):
-    """
-    Generator function that walks through all files in the specified directory (inclusive),
-    excluding directories listed in the exclude_dir argument.
-
-    Args:
-    dir (str, optional): The root directory to start walking from. Default is '/' (the root directory).
-    exclude_dir (list, optional): A list of directory paths to exclude from the search. Default is empty.
-
-    Yields:
-    str: Absolute path of each file found during the traversal.
-
-    The function uses os.walk() to traverse the directory tree, but filters out directories
-    contained in the exclude_dir list before iterating over the files within each directory.
-    """
     exclude_dir = [os.path.abspath(d) for d in exclude_dir]
 
     for root, dirs, files in os.walk(dir):
@@ -217,24 +134,6 @@ def walk_files(dir:str="/", exclude_dir:List[str]=[]):
 
 
 def get_cached_pages_size(fd:int, file_size:int):
-    """
-    Determine the total size of pages from the given file descriptor that are currently cached in memory.
-
-    Args:
-    fd (int): File descriptor of the opened file.
-    file_size (int): Size of the file in bytes.
-
-    Process:
-    1. Create a memory-mapped object using `mmap` with `MAP_PRIVATE` and `ACCESS_READ` flags.
-    2. Obtain a buffer pointer from the memory-mapped object and convert it to a C-compatible address.
-    3. Allocate a character array `vec` large enough to store one bit per page, rounded up to account for the remainder if the file size isn't a multiple of the page size.
-    4. Call the `mincore` system call to determine which pages of the file are resident in memory. The result is stored in the `vec` array.
-
-    Returns:
-    int: The total size in bytes of the pages that are cached in memory.
-
-    Note: This function assumes that the `PAGE_SIZE` constant is defined elsewhere.
-    """
     cached_pages = 0
     with mmap.mmap(fd, file_size, mmap.MAP_PRIVATE | mmap.ACCESS_READ) as result:
         # get buf from mmap object & get addr of this buf
