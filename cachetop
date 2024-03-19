@@ -142,7 +142,6 @@ def get_cached_pages_size(fd:int, file_size:int):
         addr_ptr_val = ctypes.cast(addr, ctypes.c_void_p).value
 
         remaining_size = file_size
-        offset = 0
         while remaining_size > 0:
             segment_size = min(remaining_size, vec_length)
             result = libc.mincore(ctypes.c_void_p(addr_ptr_val),
@@ -153,8 +152,7 @@ def get_cached_pages_size(fd:int, file_size:int):
 
             cached_pages += sum(bytearray(vec[:segment_size // PAGE_SIZE + (segment_size % PAGE_SIZE != 0)]))
             remaining_size -= segment_size
-            offset += segment_size
-            addr_ptr_val += offset
+            addr_ptr_val += segment_size
 
         del res, addr
 
