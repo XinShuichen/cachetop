@@ -50,7 +50,6 @@ import ctypes
 import mmap
 import heapq
 import argparse
-from typing import List,Tuple
 
 PAGE_SIZE = os.sysconf("SC_PAGESIZE")
 libc = ctypes.CDLL("libc.so.6")
@@ -62,7 +61,7 @@ vec = (
 
 
 class MountInfo:
-    def __init__(self, search_type:List[str]=["ext4", "tmpfs"], exclude_dir:List[str]=[]) -> None:
+    def __init__(self, search_type, exclude_dir=[]) -> None:
         self.search_type = search_type
         self.exclude_dir = exclude_dir
         self.search_dir = []
@@ -82,22 +81,22 @@ class MountInfo:
 
 
 class SortedQueue:
-    def __init__(self, max_size: int):
+    def __init__(self, max_size):
         self.heap = []
         self.max_size = max_size
 
-    def push(self, item_pair: Tuple[int, str]):
+    def push(self, item_pair):
         heapq.heappush(self.heap, list(item_pair))
         if len(self.heap) > self.max_size:
             self.pop()
 
-    def pop(self) -> Tuple[int, str]:
+    def pop(self):
         if self.heap:
             return tuple(heapq.heappop(self.heap))
         else:
             raise IndexError("pop from an empty queue")
 
-    def peek(self) -> Tuple[int, str] | None:
+    def peek(self):
         if self.heap:
             return tuple(self.heap[0])
         else:
@@ -108,7 +107,7 @@ class SortedQueue:
             yield item
 
 
-def bytes_to_readable(size:int, decimal_places:int=2):
+def bytes_to_readable(size, decimal_places=2):
     suffixes = ["B", "KB", "MB", "GB", "TB", "PB"]
     index = 0
 
@@ -119,7 +118,7 @@ def bytes_to_readable(size:int, decimal_places:int=2):
     return f"{size:.{decimal_places}f} {suffixes[index]}"
 
 
-def walk_files(dir:str="/", exclude_dir:List[str]=[]):
+def walk_files(dir="/", exclude_dir=[]):
     exclude_dir = [os.path.abspath(d) for d in exclude_dir]
 
     for root, dirs, files in os.walk(dir):
@@ -133,7 +132,7 @@ def walk_files(dir:str="/", exclude_dir:List[str]=[]):
                 yield file_path
 
 
-def get_cached_pages_size(fd:int, file_size:int):
+def get_cached_pages_size(fd, file_size):
     cached_pages = 0
     with mmap.mmap(fd, file_size, mmap.MAP_PRIVATE | mmap.ACCESS_READ) as result:
         # get buf from mmap object & get addr of this buf
@@ -159,7 +158,7 @@ def get_cached_pages_size(fd:int, file_size:int):
     return cached_pages * PAGE_SIZE
 
 
-def main(mount_info: MountInfo, queue: SortedQueue, search_path: str):
+def main(mount_info, queue, search_path):
     queue.push([0, ""])
     count, mincore_count = 0, 0
     for file in walk_files(search_path, mount_info.exclude_dir):
