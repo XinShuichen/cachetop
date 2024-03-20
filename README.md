@@ -23,6 +23,15 @@ In Linux kernel, if a process opens a file, reads/writes to it, and then closes 
 
 To obtain all the cache data, it is necessary to traverse all system files and capture cache data for each file. During the capturing process, virtual file systems like procfs and sysfs do not need to be queried. This program uses a whitelist approach, and currently, it only queries data under ext4 and tmpfs mount points by default.
 
+An experiment, files in tmpfs are directly stored in the cache. You can try creating a 1GB file in tmpfs with `dd if=/dev/zero of=output.bin bs=1G count=1`, and you will see that the buff/cache in free increases by 1GB.
+<img width="567" alt="image" src="https://github.com/XinShuichen/cachetop/assets/26585883/f1b69533-023f-4a48-ad98-1434d0e8c4a1">
+** At this point, this file cannot be seen using hcache. But It can be seen using cachetop. **
+
+hcache:
+<img width="862" alt="image" src="https://github.com/XinShuichen/cachetop/assets/26585883/a0c4da36-b2c8-478f-b6eb-afd52151422f">
+cachetop:
+<img width="1258" alt="image" src="https://github.com/XinShuichen/cachetop/assets/26585883/6600ffbd-f13e-413a-aef4-b617a6f67d30">
+
 ### Optimizations
 
 The following optimizations have been made to achieve O(1) space complexity:
@@ -117,10 +126,4 @@ FILE NAME                                                                       
 /var/lib/plocate/plocate.db                                                                                                         | 14.47 MB             | 14.47 MB            
 ./cachetop -n 20  5.43s user 6.26s system 98% cpu 11.814 total
 ```
-
-In contrast to running hcache on the machine at the same time, you can see that hcache is all binaries/dynamic libraries/mappings of the process itself, whereas cachetop actually has access to the entire cache.
-
-<img width="1248" alt="image" src="https://github.com/XinShuichen/cachetop/assets/26585883/f7597e9f-60b0-4188-b6b3-8afee84e0ff7">
-
-<img width="851" alt="image" src="https://github.com/XinShuichen/cachetop/assets/26585883/d26b9768-4fe3-44be-831e-353167c9e889">
 
