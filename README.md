@@ -1,6 +1,7 @@
 # cachetop
 
 > Author: Xin Shuichen<zhangyuchen.prog@foxmail.com>
+> support python2 and python3
 
 ## Description
 
