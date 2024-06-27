@@ -182,23 +182,19 @@ def main(mount_info, queue, search_path):
         if file_size == 0 or file_size < queue.peek()[0]:
             os.close(fd)
             continue
-        mincore_count += 1
-        cached_size = get_cached_pages_size(fd, file_size)
-        queue.push((cached_size, file))
 
-        os.close(fd)
-        # try:
-        #     mincore_count += 1
-        #     cached_size = get_cached_pages_size(fd, file_size)
-        #     queue.push((cached_size, file))
-        # except Exception as e:
-        #     print(
-        #         "Error: {0} {1} file_size: {2} file_path: {3}".format(
-        #             e, type(queue.peek()[0]), file_size, file
-        #         )
-        #     )
-        # finally:
-        #     os.close(fd)
+        try:
+            mincore_count += 1
+            cached_size = get_cached_pages_size(fd, file_size)
+            queue.push((cached_size, file))
+        except Exception as e:
+            print(
+                "Error: {0} {1} file_size: {2} file_path: {3}".format(
+                    e, type(queue.peek()[0]), file_size, file
+                )
+            )
+        finally:
+            os.close(fd)
 
     max_len = 0
     res = []
