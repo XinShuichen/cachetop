@@ -161,9 +161,9 @@ def get_cached_pages_size(fd, file_size):
         remaining_size -= segment_size
         addr_ptr_val += segment_size
 
-    mmap_addr.close()
-
     del res, addr
+
+    mmap_addr.close()
 
     return cached_pages * PAGE_SIZE
 
